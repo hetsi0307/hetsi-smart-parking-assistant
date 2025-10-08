@@ -39,7 +39,7 @@
     #video { width: 100%; height: 100%; object-fit: cover; grid-row: 1; }
     #overlay { position: absolute; inset: 0; pointer-events: none; }
     .hud { grid-row: 2; display: grid; gap: 8px; padding: 12px; background: linear-gradient(180deg, rgba(0,0,0,0.0), rgba(0,0,0,0.8)); }
-    .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+    .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
     button, select { appearance: none; background: #0ea5e9; color: #001018; border: none; border-radius: 12px; padding: 12px 14px; font-weight: 700; }
     button.secondary { background: #94a3b8; color: #0b1220; }
     .pill { background: rgba(255,255,255,0.12); padding: 8px 10px; border-radius: 999px; font-size: 13px; }
@@ -81,6 +81,7 @@
         <button id="btnStart" aria-label="Start guidance">Start</button>
         <button id="btnStop" class="secondary" aria-label="Stop guidance">Stop</button>
         <button id="btnReset" class="secondary" aria-label="Reset target">Reset</button>
+        <button id="btnCam" class="secondary" aria-label="Enable camera" style="display:none;">Enable Camera</button>
         <select id="voiceMode" aria-label="Voice mode">
           <option value="on" selected>Voice on</option>
           <option value="off">Voice off</option>
@@ -107,6 +108,7 @@
     const btnStop = document.getElementById('btnStop');
     const btnReset = document.getElementById('btnReset');
     const voiceMode = document.getElementById('voiceMode');
+    const btnCam = document.getElementById('btnCam');
 
     // State
     let stream = null;
@@ -121,22 +123,28 @@
     async function startCamera() {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
+          video: { facingMode: { ideal: 'environment' } }, // desktop may fall back to any webcam
           audio: false
         });
         video.srcObject = stream;
         await video.play();
         camStatus.textContent = 'camera ready';
         camDot.style.background = '#22c55e';
+        btnCam.style.display = 'none'; // hide manual button once working
         resizeCanvas();
         speak('Welcome to Hetsi’s Smart Parking Assistant. Tap to set your parking spot.');
       } catch (e) {
-        camStatus.textContent = 'camera error';
+        camStatus.textContent = 'camera blocked';
         camDot.style.background = '#ef4444';
         console.error(e);
-        speak('Unable to access camera. Please check permissions.');
+        // show the button so the user can try again after changing permissions
+        if (btnCam) btnCam.style.display = 'inline-block';
+        speak('Unable to access camera. Click Enable Camera or check permissions.');
       }
     }
+
+    // let users manually start camera (useful on desktop/incognito)
+    if (btnCam) btnCam.addEventListener('click', startCamera);
 
     function stopCamera() {
       if (stream) stream.getTracks().forEach(t => t.stop());
@@ -291,7 +299,7 @@
     }
 
     // Boot
-    startCamera();
+    startCamera();       // try automatically (mobile)
     initOrientation();
     initASR();
     draw();
