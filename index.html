@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+
+  <title>Hetsi’s Smart Parking Assistant | PWA with Camera and Voice Guidance</title>
+  <meta name="description" content="Hetsi’s Smart Parking Assistant is a Progressive Web App that opens your phone’s rear camera and gives real-time voice guidance to help you align and park safely. Installable PWA. Works best on Android Chrome." />
+
+  <!-- Canonical -->
+  <link rel="canonical" href="https://hetsi0307.github.io/hetsi-smart-parking-assistant/" />
+
+  <!-- PWA basics -->
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <link rel="icon" sizes="192x192" href="icons/icon-192.png" />
+  <link rel="icon" sizes="512x512" href="icons/icon-512.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Hetsi’s Smart Parking Assistant" />
+  <meta property="og:description" content="PWA that uses the rear camera and voice prompts to guide parking. Tap to set a spot, then follow arrows and audio cues." />
+  <meta property="og:url" content="https://hetsi0307.github.io/hetsi-smart-parking-assistant/" />
+  <meta property="og:image" content="https://hetsi0307.github.io/hetsi-smart-parking-assistant/icons/icon-512.png" />
+  <meta property="og:site_name" content="Hetsi’s Smart Parking Assistant" />
+
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Hetsi’s Smart Parking Assistant" />
+  <meta name="twitter:description" content="Progressive Web App with camera view and voice guidance to assist in parking." />
+  <meta name="twitter:image" content="https://hetsi0307.github.io/hetsi-smart-parking-assistant/icons/icon-512.png" />
+
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #000; color: #fff; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    .app { position: fixed; inset: 0; display: grid; grid-template-rows: 1fr auto; }
+    #video { width: 100%; height: 100%; object-fit: cover; grid-row: 1; }
+    #overlay { position: absolute; inset: 0; pointer-events: none; }
+    .hud { grid-row: 2; display: grid; gap: 8px; padding: 12px; background: linear-gradient(180deg, rgba(0,0,0,0.0), rgba(0,0,0,0.8)); }
+    .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+    button, select { appearance: none; background: #0ea5e9; color: #001018; border: none; border-radius: 12px; padding: 12px 14px; font-weight: 700; }
+    button.secondary { background: #94a3b8; color: #0b1220; }
+    .pill { background: rgba(255,255,255,0.12); padding: 8px 10px; border-radius: 999px; font-size: 13px; }
+    .status { display: flex; gap: 8px; align-items: center; }
+    .dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; }
+    canvas { display: block; }
+    .hint { opacity: .9; font-size: 12px; }
+    noscript { position: fixed; inset: 0; display: grid; place-items: center; background: #000; color: #fff; padding: 16px; }
+  </style>
+
+  <!-- JSON-LD structured data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebApplication",
+    "name": "Hetsi’s Smart Parking Assistant",
+    "url": "https://hetsi0307.github.io/hetsi-smart-parking-assistant/",
+    "applicationCategory": "UtilityApplication",
+    "operatingSystem": "Android, iOS, Web",
+    "description": "Progressive Web App that uses the rear camera with on-screen arrows and voice prompts to guide vehicle parking.",
+    "image": "https://hetsi0307.github.io/hetsi-smart-parking-assistant/icons/icon-512.png",
+    "author": { "@type": "Person", "name": "Hetsi" },
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
+</head>
+<body>
+  <noscript>This app needs JavaScript to run.</noscript>
+
+  <div class="app">
+    <video id="video" autoplay playsinline></video>
+    <canvas id="overlay"></canvas>
+    <div class="hud">
+      <div class="row">
+        <div class="status"><span class="dot" id="camDot"></span><span id="camStatus">camera</span></div>
+        <div class="pill" id="ori">yaw 0° | pitch 0° | roll 0°</div>
+      </div>
+      <div class="row">
+        <button id="btnStart" aria-label="Start guidance">Start</button>
+        <button id="btnStop" class="secondary" aria-label="Stop guidance">Stop</button>
+        <button id="btnReset" class="secondary" aria-label="Reset target">Reset</button>
+        <select id="voiceMode" aria-label="Voice mode">
+          <option value="on" selected>Voice on</option>
+          <option value="off">Voice off</option>
+        </select>
+      </div>
+      <div class="hint">Tip: tap the screen where the parking spot should be. Allow camera and motion permissions.</div>
+    </div>
+  </div>
+
+  <script>
+    // Register service worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('sw.js'));
+    }
+
+    // Elements
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const octx = overlay.getContext('2d');
+    const camStatus = document.getElementById('camStatus');
+    const camDot = document.getElementById('camDot');
+    const oriEl = document.getElementById('ori');
+    const btnStart = document.getElementById('btnStart');
+    const btnStop = document.getElementById('btnStop');
+    const btnReset = document.getElementById('btnReset');
+    const voiceMode = document.getElementById('voiceMode');
+
+    // State
+    let stream = null;
+    let running = false;
+    let target = null; // {x, y}
+    let yaw = 0, pitch = 0, roll = 0;
+    let speechOn = true;
+
+    voiceMode.addEventListener('change', () => { speechOn = voiceMode.value === 'on'; });
+
+    // Camera
+    async function startCamera() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false
+        });
+        video.srcObject = stream;
+        await video.play();
+        camStatus.textContent = 'camera ready';
+        camDot.style.background = '#22c55e';
+        resizeCanvas();
+        speak('Welcome to Hetsi’s Smart Parking Assistant. Tap to set your parking spot.');
+      } catch (e) {
+        camStatus.textContent = 'camera error';
+        camDot.style.background = '#ef4444';
+        console.error(e);
+        speak('Unable to access camera. Please check permissions.');
+      }
+    }
+
+    function stopCamera() {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      stream = null;
+      camStatus.textContent = 'camera stopped';
+      camDot.style.background = '#f59e0b';
+    }
+
+    function resizeCanvas() {
+      overlay.width = window.innerWidth;
+      overlay.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    // Device orientation with iOS permission handling
+    async function initOrientation() {
+      try {
+        const needPerm = typeof DeviceOrientationEvent !== 'undefined'
+          && typeof DeviceOrientationEvent.requestPermission === 'function';
+
+        if (needPerm) {
+          const res = await DeviceOrientationEvent.requestPermission();
+          if (res !== 'granted') return;
+        }
+
+        window.addEventListener('deviceorientation', (e) => {
+          yaw = e.alpha || 0;
+          pitch = e.beta || 0;
+          roll = e.gamma || 0;
+          oriEl.textContent = `yaw ${yaw.toFixed(0)}° | pitch ${pitch.toFixed(0)}° | roll ${roll.toFixed(0)}°`;
+        });
+      } catch (e) {
+        console.warn('orientation not available', e);
+      }
+    }
+
+    // TTS
+    function speak(text) {
+      if (!speechOn) return;
+      if (!('speechSynthesis' in window)) return;
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'en-US';
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    }
+
+    // Speech recognition
+    let recog = null;
+    function initASR() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) return;
+      recog = new SR();
+      recog.lang = 'en-US';
+      recog.continuous = true;
+      recog.interimResults = false;
+      recog.onresult = (ev) => {
+        const last = ev.results[ev.results.length - 1][0].transcript.trim().toLowerCase();
+        if (last.includes('start')) startGuidance();
+        if (last.includes('stop')) stopGuidance();
+        if (last.includes('reset')) resetTarget();
+      };
+      recog.onerror = (e) => console.warn('asr error', e);
+    }
+    function startASR() { if (recog) try { recog.start(); } catch(e){} }
+    function stopASR() { if (recog) try { recog.stop(); } catch(e){} }
+
+    // Interactions
+    overlay.addEventListener('click', (e) => {
+      const rect = overlay.getBoundingClientRect();
+      target = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      draw();
+      speak('Target set. Say start to begin guidance.');
+    });
+
+    btnStart.addEventListener('click', startGuidance);
+    btnStop.addEventListener('click', stopGuidance);
+    btnReset.addEventListener('click', () => { resetTarget(); draw(); });
+
+    function resetTarget() { target = null; speak('Target cleared'); }
+
+    function startGuidance() {
+      if (!target) { speak('Please tap to set your parking spot.'); return; }
+      running = true;
+      speak('Guidance started. Reverse slowly.');
+    }
+    function stopGuidance() { running = false; speak('Guidance stopped.'); }
+
+    // Draw loop and cues
+    function draw() {
+      const w = overlay.width, h = overlay.height;
+      octx.clearRect(0, 0, w, h);
+
+      // reference crosshair near bottom center
+      octx.strokeStyle = 'rgba(255,255,255,0.9)';
+      octx.lineWidth = 2;
+      octx.beginPath();
+      octx.moveTo(w/2 - 20, h*0.7); octx.lineTo(w/2 + 20, h*0.7);
+      octx.moveTo(w/2, h*0.7 - 20); octx.lineTo(w/2, h*0.7 + 20);
+      octx.stroke();
+
+      // target marker
+      if (target) {
+        octx.fillStyle = 'rgba(14,165,233,0.95)';
+        octx.beginPath();
+        octx.arc(target.x, target.y, 10, 0, Math.PI*2);
+        octx.fill();
+      }
+
+      // guidance cues
+      if (running && target) {
+        const dx = target.x - w/2;
+        const dy = target.y - h*0.7;
+        const dist = Math.hypot(dx, dy);
+
+        if (Math.abs(dx) > 40) {
+          drawArrow(w/2, h*0.8, w/2 + Math.sign(dx)*100, h*0.8);
+          speakThrottled(dx > 0 ? 'turn right a bit' : 'turn left a bit');
+        }
+        if (Math.abs(dy) > 40) {
+          drawArrow(w/2, h*0.85, w/2, h*0.85 + Math.sign(dy)*100);
+          speakThrottled(dy > 0 ? 'reverse slowly' : 'move forward slowly');
+        }
+        if (dist <= 40) {
+          speakThrottled('aligned. stop now');
+        }
+      }
+
+      requestAnimationFrame(draw);
+    }
+
+    function drawArrow(x1, y1, x2, y2) {
+      const head = 12;
+      const angle = Math.atan2(y2 - y1, x2 - x1);
+      octx.strokeStyle = 'rgba(34,197,94,0.95)';
+      octx.lineWidth = 6; octx.lineCap = 'round';
+      octx.beginPath(); octx.moveTo(x1, y1); octx.lineTo(x2, y2); octx.stroke();
+      octx.beginPath();
+      octx.moveTo(x2, y2);
+      octx.lineTo(x2 - head * Math.cos(angle - Math.PI/6), y2 - head * Math.sin(angle - Math.PI/6));
+      octx.lineTo(x2 - head * Math.cos(angle + Math.PI/6), y2 - head * Math.sin(angle + Math.PI/6));
+      octx.closePath(); octx.fillStyle = 'rgba(34,197,94,0.95)'; octx.fill();
+    }
+
+    // Throttle TTS
+    let lastSpeechAt = 0;
+    function speakThrottled(text) {
+      const now = performance.now();
+      if (now - lastSpeechAt > 1500) {
+        speak(text);
+        lastSpeechAt = now;
+      }
+    }
+
+    // Boot
+    startCamera();
+    initOrientation();
+    initASR();
+    draw();
+
+    // Start ASR after a user gesture
+    document.body.addEventListener('click', () => startASR(), { once: true });
+  </script>
+</body>
+</html>
